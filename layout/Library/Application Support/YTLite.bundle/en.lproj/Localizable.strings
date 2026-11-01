@@ -53,6 +53,19 @@
 "Copy" = "Copy";
 "Ask" = "Ask";
 "DownloadCompleted" = "Download completed";
+"DownloadButton" = "Download button in player";
+"DownloadButtonDesc" = "Adds a download button below the top-right controls of the video player.";
+"ShortsDownloadButton" = "Download button in Shorts";
+"ShortsDownloadButtonDesc" = "Adds a download button above the like button in the Shorts player.";
+"SaveToFiles" = "Files app";
+"DownloadedFiles" = "Downloaded files";
+"DownloadedFilesDesc" = "Stored in the app's Documents/Downloads folder. If file sharing is enabled for the app, the folder also appears in the Files app under On My iPhone › YouTube.";
+"ClearDownloads" = "Delete all downloads";
+"ClearDownloadsMessage" = "All downloaded videos and audio files will be deleted from this device.";
+"Downloads.NoFormats" = "No downloadable formats were found for this video.";
+"Downloads.SavedInApp" = "Saved to Downloads (Files app › On My iPhone › YouTube)";
+"Downloads.SaveToFiles" = "Save to Files";
+"Downloads.Menu.Play" = "Play";
 
 "PreferredAudio" = "Preferred audio track";
 "Selected" = "Selected";
@@ -99,7 +112,7 @@
 /* Feed options */
 "Feed" = "Feed";
 "RemoveAds" = "Remove ads";
-"RemoveAdsDesc" = "Removes in-app ads.";
+"RemoveAdsDesc" = "Removes video ads, ads in the feed, search and Shorts, shopping/product promotions and ad targeting signals.";
 "HideShorts" = "Hide Shorts videos";
 "HideShortsDesc" = "Hides Shorts videos from Homepage, Recommended etc.";
 "KeepSubsShorts" = "Keep Shorts in Subscriptions";
@@ -599,7 +612,9 @@
 
 /* SponsorBlock settings */
 "EnableSponsorBlock" = "Enable SponsorBlock";
-"EnableSponsorBlockDesc" = "Activates the SponsorBlock extension.";
+"EnableSponsorBlockDesc" = "Skips sponsors and other segments submitted by the SponsorBlock community (sponsor.ajay.app). Lookups only send a short hash prefix of the video ID, never the video itself.";
+"SbCountSkips" = "Count skips for submitters";
+"SbCountSkipsDesc" = "Tells SponsorBlock when you skip a segment so the people who submitted it get credit. The segment's ID reveals which video you watched.";
 "SbPlayerButton" = "Display button in overlay";
 "SbPlayerButtonDesc" = "Adds SponsorBlock button in players overlay. Stays available even if SponsorBlock is disabled, so it can be switched right from the player.";
 "ShowNotifications" = "Show notifications";

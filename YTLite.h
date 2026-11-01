@@ -6,8 +6,6 @@
 #import "Utils/Reachability.h"
 #import "YouTubeHeaders.h"
 
-#define LOC(key) [NSBundle.ytl_defaultBundle localizedStringForKey:key value:nil table:nil]
-
 #define ytlBool(key) [[YTLUserDefaults standardUserDefaults] boolForKey:key]
 #define ytlInt(key) [[YTLUserDefaults standardUserDefaults] integerForKey:key]
 

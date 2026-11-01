@@ -1,7 +1,10 @@
 #import "YTLite.h"
+#import "Downloader/YTLDownloadManager.h"
 
 @interface YTSettingsSectionItemManager (YTLite)
 - (void)updateYTLiteSectionWithEntry:(id)entry;
+- (YTSettingsSectionItem *)downloadsSectionItemForController:(YTSettingsViewController *)settingsViewController;
+- (void)pushDownloadedFilesFromController:(YTSettingsViewController *)settingsViewController;
 @end
 
 static const NSInteger YTLiteSection = 789;
@@ -109,6 +112,100 @@ static NSString *GetCacheSize() {
     }];
 }
 
+%new
+- (YTSettingsSectionItem *)downloadsSectionItemForController:(YTSettingsViewController *)settingsViewController {
+    Class YTSettingsSectionItemClass = %c(YTSettingsSectionItem);
+    // Order matches YTLDownloadSaveAction.
+    NSArray <NSString *> *saveActions = @[LOC(@"Ask"), LOC(@"SaveToPhotos"), LOC(@"SaveToFiles"), LOC(@"Share"), LOC(@"SaveToDownloads")];
+
+    return [YTSettingsSectionItemClass itemWithTitle:LOC(@"Downloading")
+        accessibilityIdentifier:@"YTLiteSectionItem"
+        detailTextBlock:^NSString *() {
+            return @"‣";
+        }
+        selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+            YTSettingsSectionItem *saveAction = [YTSettingsSectionItemClass itemWithTitle:LOC(@"PostDownloadAction") titleDescription:LOC(@"PostDownloadDesc") accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:^NSString *() {
+                NSInteger index = ytlInt(@"downloadSaveAction");
+                return index >= 0 && index < (NSInteger)saveActions.count ? saveActions[index] : saveActions[0];
+            } selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+                NSMutableArray <YTSettingsSectionItem *> *rows = [NSMutableArray array];
+                for (NSString *title in saveActions) {
+                    [rows addObject:[YTSettingsSectionItemClass checkmarkItemWithTitle:title titleDescription:nil selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+                        ytlSetInt((int)arg1, @"downloadSaveAction");
+                        [settingsViewController reloadData];
+                        return YES;
+                    }]];
+                }
+
+                YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:LOC(@"PostDownloadAction") pickerSectionTitle:nil rows:rows selectedItemIndex:ytlInt(@"downloadSaveAction") parentResponder:[self parentResponder]];
+                [settingsViewController pushViewController:picker];
+                return YES;
+            }];
+
+            YTSettingsSectionItem *files = [YTSettingsSectionItemClass itemWithTitle:LOC(@"DownloadedFiles") titleDescription:LOC(@"DownloadedFilesDesc") accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:^NSString *() {
+                return [YTLDownloadManager formattedSize:[YTLDownloadManager downloadsSize]];
+            } selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+                [self pushDownloadedFilesFromController:settingsViewController];
+                return YES;
+            }];
+
+            YTSettingsSectionItem *clear = [YTSettingsSectionItemClass itemWithTitle:LOC(@"ClearDownloads") titleDescription:nil accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:nil selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+                YTAlertView *alertView = [%c(YTAlertView) confirmationDialogWithAction:^{
+                    [YTLDownloadManager deleteAllDownloads];
+                    [settingsViewController reloadData];
+                    [[%c(YTToastResponderEvent) eventWithMessage:LOC(@"Downloads.Deleted") firstResponder:[self parentResponder]] send];
+                }
+                actionTitle:LOC(@"Yes")
+                cancelTitle:LOC(@"No")];
+                alertView.title = LOC(@"Warning");
+                alertView.subtitle = LOC(@"ClearDownloadsMessage");
+                [alertView show];
+                return YES;
+            }];
+
+            NSArray <YTSettingsSectionItem *> *rows = @[
+                [self switchWithTitle:@"DownloadButton" key:@"downloadButton"],
+                [self switchWithTitle:@"ShortsDownloadButton" key:@"shortsDownloadButton"],
+                saveAction,
+                files,
+                clear
+            ];
+
+            YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:LOC(@"Downloading") pickerSectionTitle:nil rows:rows selectedItemIndex:NSNotFound parentResponder:[self parentResponder]];
+            [settingsViewController pushViewController:picker];
+            return YES;
+        }];
+}
+
+%new
+- (void)pushDownloadedFilesFromController:(YTSettingsViewController *)settingsViewController {
+    Class YTSettingsSectionItemClass = %c(YTSettingsSectionItem);
+    __block __weak YTSettingsPickerViewController *weakPicker = nil;
+    NSMutableArray <YTSettingsSectionItem *> *rows = [NSMutableArray array];
+
+    for (NSURL *file in [YTLDownloadManager downloadedFiles]) {
+        NSNumber *size = nil;
+        [file getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+        [rows addObject:[YTSettingsSectionItemClass itemWithTitle:file.lastPathComponent titleDescription:[YTLDownloadManager formattedSize:size.unsignedLongLongValue] accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:nil selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+            UIViewController *presenter = weakPicker ?: (UIViewController *)settingsViewController;
+            [[YTLDownloadManager sharedManager] presentActionsForFile:file fromViewController:presenter sourceView:cell completion:^{
+                // The list is static: leave it after a deletion so it can't show a stale entry.
+                [settingsViewController reloadData];
+                [weakPicker.navigationController popViewControllerAnimated:YES];
+            }];
+            return YES;
+        }]];
+    }
+
+    if (rows.count == 0) {
+        [rows addObject:[YTSettingsSectionItemClass itemWithTitle:LOC(@"Downloads.Empty") accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:nil selectBlock:nil]];
+    }
+
+    YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:LOC(@"DownloadedFiles") pickerSectionTitle:nil rows:rows selectedItemIndex:NSNotFound parentResponder:[self parentResponder]];
+    weakPicker = picker;
+    [settingsViewController pushViewController:picker];
+}
+
 %new(v@:@)
 - (void)updateYTLiteSectionWithEntry:(id)entry {
     NSMutableArray *sectionItems = [NSMutableArray array];
@@ -134,6 +231,8 @@ static NSString *GetCacheSize() {
     }];
 
     [sectionItems addObject:general];
+
+    [sectionItems addObject:[self downloadsSectionItemForController:settingsViewController]];
 
     YTSettingsSectionItem *navbar = [YTSettingsSectionItemClass itemWithTitle:LOC(@"Navbar")
     accessibilityIdentifier:@"YTLiteSectionItem"

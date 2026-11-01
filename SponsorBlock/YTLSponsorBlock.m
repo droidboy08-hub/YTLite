@@ -140,7 +140,7 @@ static YTLSponsorSegment *YTLSegmentFromJSON(id json) {
 + (void)fetchSegmentsForVideoID:(NSString *)videoID completion:(void (^)(NSArray <YTLSponsorSegment *> *))completion {
     void (^finish)(NSArray *) = ^(NSArray *segments) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            completion(segments ?: @[]);
+            completion(segments);
         });
     };
 
@@ -149,7 +149,7 @@ static YTLSponsorSegment *YTLSegmentFromJSON(id json) {
         if (category.mode != YTLSBModeOff) anyEnabled = YES;
     }
     if (videoID.length == 0 || !anyEnabled) {
-        finish(@[]);
+        finish(nil);  // nothing to look up yet; asked again once a category is enabled
         return;
     }
 
@@ -168,27 +168,28 @@ static YTLSponsorSegment *YTLSegmentFromJSON(id json) {
         [NSURLQueryItem queryItemWithName:@"actionTypes" value:YTLJSONArrayString(@[@"skip", @"poi"])]
     ];
     if (!components.URL) {
-        finish(@[]);
+        finish(nil);
         return;
     }
 
     [[YTLSponsorSession() dataTaskWithURL:components.URL completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
-        if (status == 404) {
+        if (status == 404 && !error) {
             // No segments for any video with this prefix.
             [YTLSponsorCache() setObject:@[] forKey:videoID];
             finish(@[]);
             return;
         }
-        if (error || status != 200 || data.length == 0 || data.length > 2 * 1024 * 1024) {
-            finish(@[]);  // not cached: try again next time
+
+        id json = !error && status == 200 && data.length && data.length <= 2 * 1024 * 1024 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![json isKindOfClass:NSArray.class]) {
+            finish(nil);  // network error, rate limit, captive portal…: not cached, retried later
             return;
         }
 
         // The response lists every video whose hash starts with the prefix.
         NSMutableArray <YTLSponsorSegment *> *segments = [NSMutableArray array];
-        id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        for (id entry in [json isKindOfClass:NSArray.class] ? json : @[]) {
+        for (id entry in (NSArray *)json) {
             if (![entry isKindOfClass:NSDictionary.class] || ![entry[@"videoID"] isEqual:videoID]) continue;
             NSArray *items = entry[@"segments"];
             for (id item in [items isKindOfClass:NSArray.class] ? items : @[]) {
@@ -203,7 +204,7 @@ static YTLSponsorSegment *YTLSegmentFromJSON(id json) {
 }
 
 + (void)reportSkippedSegment:(YTLSponsorSegment *)segment {
-    if (segment.UUID.length == 0) return;
+    if (segment.UUID.length == 0 || ![YTLUserDefaults.standardUserDefaults boolForKey:@"sbCountSkips"]) return;
     NSURLComponents *components = [NSURLComponents componentsWithString:[kYTLSponsorBlockAPI stringByAppendingString:@"viewedVideoSponsorTime"]];
     components.queryItems = @[[NSURLQueryItem queryItemWithName:@"UUID" value:segment.UUID]];
     if (!components.URL) return;

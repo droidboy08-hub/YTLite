@@ -33,10 +33,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// of SHA-256(videoID) are sent, so the server can't tell which video is being watched.
 @interface YTLSponsorBlock : NSObject
 + (BOOL)isEnabled;
-/// Segments of every supported category for `videoID` (empty when there are none).
-/// Completion runs on the main queue; results are cached for the session.
-+ (void)fetchSegmentsForVideoID:(NSString *)videoID completion:(void (^)(NSArray <YTLSponsorSegment *> *segments))completion;
-/// Counts a skip for the segment's submitters (SponsorBlock's view counter). Fire and forget.
+/// Segments of every supported category for `videoID`: an empty array when there are none,
+/// nil when the lookup failed or every category is off (try again later). Completion runs on
+/// the main queue; successful answers are cached for the session.
++ (void)fetchSegmentsForVideoID:(NSString *)videoID completion:(void (^)(NSArray <YTLSponsorSegment *> *_Nullable segments))completion;
+/// Counts a skip for the segment's submitters (SponsorBlock's view counter) when the user
+/// allowed it: the segment ID tells the server which video was watched. Fire and forget.
 + (void)reportSkippedSegment:(YTLSponsorSegment *)segment;
 /// Optional sound / haptic after a skip.
 + (void)playSkipFeedback;

@@ -232,7 +232,8 @@ static NSString *GetCacheSize() {
                 segments,
                 [self switchWithTitle:@"ShowNotifications" key:@"sbShowNotifications"],
                 [self switchWithTitle:@"SegmentSkipAudio" key:@"sbSkipAudio"],
-                [self switchWithTitle:@"SegmentSkipFeedback" key:@"sbSkipHaptic"]
+                [self switchWithTitle:@"SegmentSkipFeedback" key:@"sbSkipHaptic"],
+                [self switchWithTitle:@"SbCountSkips" key:@"sbCountSkips"]
             ];
 
             YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:@"SponsorBlock" pickerSectionTitle:nil rows:rows selectedItemIndex:NSNotFound parentResponder:[self parentResponder]];

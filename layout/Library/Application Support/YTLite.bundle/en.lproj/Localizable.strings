@@ -612,7 +612,9 @@
 
 /* SponsorBlock settings */
 "EnableSponsorBlock" = "Enable SponsorBlock";
-"EnableSponsorBlockDesc" = "Skips sponsors and other segments submitted by the SponsorBlock community (sponsor.ajay.app). Only a short hash prefix of the video ID is sent, not the video itself.";
+"EnableSponsorBlockDesc" = "Skips sponsors and other segments submitted by the SponsorBlock community (sponsor.ajay.app). Lookups only send a short hash prefix of the video ID, never the video itself.";
+"SbCountSkips" = "Count skips for submitters";
+"SbCountSkipsDesc" = "Tells SponsorBlock when you skip a segment so the people who submitted it get credit. The segment's ID reveals which video you watched.";
 "SbPlayerButton" = "Display button in overlay";
 "SbPlayerButtonDesc" = "Adds SponsorBlock button in players overlay. Stays available even if SponsorBlock is disabled, so it can be switched right from the player.";
 "ShowNotifications" = "Show notifications";

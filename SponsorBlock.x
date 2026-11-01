@@ -12,8 +12,10 @@
 // SponsorBlock implementations use on recent YouTube versions.
 
 static const CFTimeInterval kYTLNoticeDuration = 5.0;
-// Right after our own seek the player may still report the old position: don't re-arm then.
-static const CFTimeInterval kYTLRearmCooldown = 2.0;
+// Right after our own seek the player may still report the old position.
+static const CFTimeInterval kYTLSeekSettleTime = 2.0;
+// A failed lookup (or every category off) is tried again after this long.
+static const CFTimeInterval kYTLRetryDelay = 10.0;
 
 typedef NS_ENUM(NSInteger, YTLPillPurpose) {
     YTLPillPurposeNone,
@@ -23,14 +25,19 @@ typedef NS_ENUM(NSInteger, YTLPillPurpose) {
 
 @interface YTLSponsorBlockState : NSObject
 @property (nonatomic, copy) NSString *videoID;
-@property (nonatomic, copy) NSArray <YTLSponsorSegment *> *segments;
-@property (nonatomic, strong) NSMutableSet <NSString *> *handled;    // skipped, or skipped by the user
-@property (nonatomic, strong) NSMutableSet <NSString *> *unskipped;  // the user chose to watch it
+@property (nonatomic, copy) NSArray <YTLSponsorSegment *> *segments;  // nil until loaded
+@property (nonatomic) BOOL loading;
+@property (nonatomic) CFTimeInterval retryAt;
+@property (nonatomic, strong) NSMutableSet <NSString *> *handled;      // skipped, or skipped by the user
+@property (nonatomic, strong) NSMutableSet <NSString *> *unskipped;    // the user chose to watch it
+@property (nonatomic) double lastTime;
+@property (nonatomic) CFTimeInterval lastSeekAt;
+@property (nonatomic) double lastSeekTarget;
 @property (nonatomic, strong) YTLSponsorPill *pill;
 @property (nonatomic) YTLPillPurpose pillPurpose;
 @property (nonatomic, copy) NSString *pillSegmentUUID;
 @property (nonatomic) CFTimeInterval noticeUntil;
-@property (nonatomic) CFTimeInterval lastActionAt;
+- (void)resetForVideoID:(NSString *)videoID;
 - (void)hidePill;
 @end
 
@@ -42,6 +49,18 @@ typedef NS_ENUM(NSInteger, YTLPillPurpose) {
         _unskipped = [NSMutableSet set];
     }
     return self;
+}
+
+- (void)resetForVideoID:(NSString *)videoID {
+    _videoID = [videoID copy];
+    _segments = nil;
+    _loading = NO;
+    _retryAt = 0;
+    _lastTime = 0;
+    _lastSeekAt = 0;
+    [_handled removeAllObjects];
+    [_unskipped removeAllObjects];
+    [self hidePill];
 }
 
 - (YTLSponsorPill *)pill {
@@ -74,9 +93,22 @@ static YTLSponsorBlockState *YTLSponsorState(YTPlayerViewController *player) {
     return state;
 }
 
+static id YTLSendIfResponds(id object, NSString *selectorName) {
+    SEL selector = NSSelectorFromString(selectorName);
+    return [object respondsToSelector:selector] ? ((id (*)(id, SEL))objc_msgSend)(object, selector) : nil;
+}
+
 static BOOL YTLPlayerFlag(id player, NSString *selectorName) {
     SEL selector = NSSelectorFromString(selectorName);
     return [player respondsToSelector:selector] && ((BOOL (*)(id, SEL))objc_msgSend)(player, selector);
+}
+
+// The ID of the video a time update belongs to, so segments are never compared against
+// another video's timeline while the player switches videos.
+static NSString *YTLVideoIDForSingleVideo(YTSingleVideoController *video) {
+    id singleVideo = YTLSendIfResponds(video, @"singleVideo") ?: YTLSendIfResponds(video, @"videoData");
+    id videoID = YTLSendIfResponds(singleVideo, @"videoId");
+    return [videoID isKindOfClass:NSString.class] && [videoID length] ? videoID : nil;
 }
 
 // The regular watch player only: not Shorts, not muted previews in the feed, not during an ad.
@@ -87,7 +119,9 @@ static BOOL YTLSponsorBlockApplies(YTPlayerViewController *player) {
     return !YTLPlayerFlag(player, @"isInlinePlaybackActive") && !YTLPlayerFlag(player, @"isPlayingAd");
 }
 
-static void YTLSponsorSeek(YTPlayerViewController *player, double time) {
+static void YTLSponsorSeek(YTPlayerViewController *player, YTLSponsorBlockState *state, double time) {
+    state.lastSeekAt = CACurrentMediaTime();
+    state.lastSeekTarget = time;
     for (NSString *name in @[@"seekToTime:", @"scrubToTime:"]) {
         SEL selector = NSSelectorFromString(name);
         if ([player respondsToSelector:selector]) {
@@ -127,17 +161,26 @@ static void YTLSponsorShowNotice(YTPlayerViewController *player, YTLSponsorBlock
         YTLSponsorBlockState *current = YTLExistingSponsorState(strongPlayer);
         if (!current) return;
         [current.unskipped addObject:segment.UUID];
-        current.lastActionAt = CACurrentMediaTime();
-        YTLSponsorSeek(strongPlayer, undoTime);
+        YTLSponsorSeek(strongPlayer, current, undoTime);
         [current hidePill];
     });
     state.noticeUntil = CACurrentMediaTime() + kYTLNoticeDuration;
+
+    // Time updates stop when playback stops (paused, or a skip reached the end of the video),
+    // so the notice also hides itself.
+    __weak YTLSponsorBlockState *weakState = state;
+    NSString *UUID = segment.UUID;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((kYTLNoticeDuration + 0.1) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        YTLSponsorBlockState *current = weakState;
+        if (current.pillPurpose == YTLPillPurposeNotice && [current.pillSegmentUUID isEqualToString:UUID] && CACurrentMediaTime() >= current.noticeUntil) {
+            [current hidePill];
+        }
+    });
 }
 
 static void YTLSponsorSkip(YTPlayerViewController *player, YTLSponsorBlockState *state, YTLSponsorSegment *segment, double duration, BOOL automatic) {
     [state.handled addObject:segment.UUID];
-    state.lastActionAt = CACurrentMediaTime();
-    YTLSponsorSeek(player, duration > 0 ? MIN(segment.end, duration) : segment.end);
+    YTLSponsorSeek(player, state, duration > 0 ? MIN(segment.end, duration) : segment.end);
     [YTLSponsorBlock reportSkippedSegment:segment];
     [YTLSponsorBlock playSkipFeedback];
 
@@ -151,8 +194,7 @@ static void YTLSponsorSkip(YTPlayerViewController *player, YTLSponsorBlockState 
 
 static void YTLSponsorJumpToHighlight(YTPlayerViewController *player, YTLSponsorBlockState *state, YTLSponsorSegment *segment, double currentTime, BOOL automatic) {
     [state.handled addObject:segment.UUID];
-    state.lastActionAt = CACurrentMediaTime();
-    YTLSponsorSeek(player, segment.start);
+    YTLSponsorSeek(player, state, segment.start);
     [YTLSponsorBlock playSkipFeedback];
 
     if (automatic) {
@@ -177,24 +219,19 @@ static void YTLSponsorOffer(YTPlayerViewController *player, YTLSponsorBlockState
 
 #pragma mark - Playback
 
-static void YTLSponsorPrepare(YTPlayerViewController *player) {
-    NSString *videoID = player.contentVideoID;
-    if (videoID.length == 0) return;
-    YTLSponsorBlockState *state = YTLSponsorState(player);
-    if ([state.videoID isEqualToString:videoID]) return;
+static void YTLSponsorLoadSegments(YTLSponsorBlockState *state, NSString *videoID) {
+    if (![state.videoID isEqualToString:videoID]) [state resetForVideoID:videoID];
+    if (state.segments || state.loading || CACurrentMediaTime() < state.retryAt) return;
 
-    state.videoID = videoID;
-    state.segments = nil;
-    [state.handled removeAllObjects];
-    [state.unskipped removeAllObjects];
-    state.lastActionAt = 0;
-    [state hidePill];
-
-    __weak YTPlayerViewController *weakPlayer = player;
+    state.loading = YES;
+    __weak YTLSponsorBlockState *weakState = state;
     [YTLSponsorBlock fetchSegmentsForVideoID:videoID completion:^(NSArray <YTLSponsorSegment *> *segments) {
-        YTLSponsorBlockState *current = YTLExistingSponsorState(weakPlayer);
+        YTLSponsorBlockState *current = weakState;
         // Drop answers for a video that is no longer playing.
-        if ([current.videoID isEqualToString:videoID]) current.segments = segments;
+        if (![current.videoID isEqualToString:videoID]) return;
+        current.loading = NO;
+        if (segments) current.segments = segments;
+        else current.retryAt = CACurrentMediaTime() + kYTLRetryDelay;
     }];
 }
 
@@ -204,21 +241,33 @@ static void YTLSponsorUpdate(YTPlayerViewController *player, YTSingleVideoContro
         return;
     }
 
-    YTLSponsorPrepare(player);
+    NSString *videoID = YTLVideoIDForSingleVideo(video) ?: player.contentVideoID;
+    if (videoID.length == 0) return;
     YTLSponsorBlockState *state = YTLSponsorState(player);
+    YTLSponsorLoadSegments(state, videoID);
+
+    CFTimeInterval now = CACurrentMediaTime();
+    BOOL settling = now - state.lastSeekAt < kYTLSeekSettleTime;
+    BOOL ownSeek = settling && fabs(currentTime - state.lastSeekTarget) < 1.5;
+    // Replay, loop or seeking back to the very start begins a fresh viewing: forget what was
+    // skipped or unskipped. Our own "Unskip" seek back to the start doesn't count.
+    BOOL restarted = currentTime < 1.0 && state.lastTime > 5.0 && !ownSeek;
+    state.lastTime = currentTime;
+
     NSArray <YTLSponsorSegment *> *segments = state.segments;
     if (segments.count == 0) return;
 
-    CFTimeInterval now = CACurrentMediaTime();
-    double duration = video.totalMediaTime;
-
-    // Rewinding before a segment arms it again, so it is skipped again when reached.
-    if (now - state.lastActionAt > kYTLRearmCooldown) {
+    if (restarted) {
+        [state.handled removeAllObjects];
+        [state.unskipped removeAllObjects];
+    } else if (!settling) {
+        // Rewinding before a segment arms it again, so it is skipped again when reached.
         for (YTLSponsorSegment *segment in segments) {
             if (![segment.actionType isEqualToString:@"poi"] && currentTime < segment.start - 1.0) [state.handled removeObject:segment.UUID];
         }
     }
 
+    double duration = video.totalMediaTime;
     NSUInteger count = MIN(segments.count, (NSUInteger)128);
     YTLSBSegment candidates[count];
     for (NSUInteger i = 0; i < count; i++) {
@@ -258,9 +307,11 @@ static void YTLSponsorUpdate(YTPlayerViewController *player, YTSingleVideoContro
 }
 
 %hook YTPlayerViewController
+// A (re)activated video starts fresh: the next time update loads its segments again (from the
+// cache when possible) and nothing carries over from a previous viewing.
 - (void)playbackController:(id)playbackController didActivateVideo:(id)video withPlaybackData:(id)playbackData {
     %orig;
-    if (YTLSponsorBlockApplies(self)) YTLSponsorPrepare(self);
+    [YTLExistingSponsorState(self) resetForVideoID:nil];
 }
 
 - (void)singleVideo:(YTSingleVideoController *)video currentVideoTimeDidChange:(YTSingleVideoTime *)time {

@@ -57,7 +57,8 @@ static UIViewController *YTLStatusBarController(UIViewController *controller, BO
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAll;
+    UIViewController *app = [self appController];
+    return app ? app.supportedInterfaceOrientations : UIInterfaceOrientationMaskAll;
 }
 @end
 

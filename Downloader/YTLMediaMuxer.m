@@ -9,19 +9,70 @@ static NSError *YTLMergeError(NSString *reason, NSError *underlying) {
     return [NSError errorWithDomain:YTLDownloaderErrorDomain code:YTLDownloaderErrorMerge userInfo:userInfo];
 }
 
+static NSError *YTLCancelledError(void) {
+    return [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil];
+}
+
 static NSDictionary *YTLAssetOptions(void) {
     return @{AVURLAssetPreferPreciseDurationAndTimingKey: @YES};
 }
+
+@interface YTLMuxOperation ()
+- (BOOL)isCancelled;
+- (BOOL)attachSession:(AVAssetExportSession *)session;
+@end
+
+@implementation YTLMuxOperation {
+    AVAssetExportSession *_session;
+    BOOL _cancelled;
+}
+
+- (BOOL)isCancelled {
+    @synchronized (self) {
+        return _cancelled;
+    }
+}
+
+// Returns NO when the operation was cancelled before the export could start.
+- (BOOL)attachSession:(AVAssetExportSession *)session {
+    @synchronized (self) {
+        _session = session;
+        return !_cancelled;
+    }
+}
+
+- (void)cancel {
+    AVAssetExportSession *session;
+    @synchronized (self) {
+        _cancelled = YES;
+        session = _session;
+    }
+    [session cancelExport];
+}
+
+@end
 
 @implementation YTLMediaMuxer
 
 // Tries each file type in order; used to fall back from MP4 to QuickTime for codecs the
 // MP4 passthrough writer doesn't accept.
-+ (void)exportAsset:(AVAsset *)asset outputURL:(NSURL *)outputURL fileTypes:(NSArray <AVFileType> *)fileTypes lastError:(NSError *)lastError completion:(YTLMuxCompletion)completion {
++ (void)exportAsset:(AVAsset *)asset outputURL:(NSURL *)outputURL fileTypes:(NSArray <AVFileType> *)fileTypes lastError:(NSError *)lastError operation:(YTLMuxOperation *)operation completion:(YTLMuxCompletion)completion {
+    if (operation.isCancelled) {
+        completion(nil, YTLCancelledError());
+        return;
+    }
+
     AVFileType fileType = fileTypes.firstObject;
     AVAssetExportSession *session = fileType ? [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetPassthrough] : nil;
     if (!session) {
         completion(nil, YTLMergeError(@"Export failed", lastError));
+        return;
+    }
+
+    NSArray <AVFileType> *remaining = [fileTypes subarrayWithRange:NSMakeRange(1, fileTypes.count - 1)];
+    // Assigning an unsupported outputFileType raises NSInvalidArgumentException.
+    if (![session.supportedFileTypes containsObject:fileType]) {
+        [self exportAsset:asset outputURL:outputURL fileTypes:remaining lastError:lastError operation:operation completion:completion];
         return;
     }
 
@@ -34,19 +85,27 @@ static NSDictionary *YTLAssetOptions(void) {
     session.outputURL = target;
     session.outputFileType = fileType;
     session.shouldOptimizeForNetworkUse = YES;
+    if (![operation attachSession:session]) {
+        completion(nil, YTLCancelledError());
+        return;
+    }
 
-    NSArray <AVFileType> *remaining = [fileTypes subarrayWithRange:NSMakeRange(1, fileTypes.count - 1)];
     [session exportAsynchronouslyWithCompletionHandler:^{
         if (session.status == AVAssetExportSessionStatusCompleted) {
             completion(target, nil);
-        } else {
-            [NSFileManager.defaultManager removeItemAtURL:target error:nil];
-            [self exportAsset:asset outputURL:outputURL fileTypes:remaining lastError:session.error ?: lastError completion:completion];
+            return;
         }
+        [NSFileManager.defaultManager removeItemAtURL:target error:nil];
+        if (session.status == AVAssetExportSessionStatusCancelled || operation.isCancelled) {
+            completion(nil, YTLCancelledError());
+            return;
+        }
+        [self exportAsset:asset outputURL:outputURL fileTypes:remaining lastError:session.error ?: lastError operation:operation completion:completion];
     }];
 }
 
-+ (void)mergeVideoURL:(NSURL *)videoURL audioURL:(NSURL *)audioURL outputURL:(NSURL *)outputURL completion:(YTLMuxCompletion)completion {
++ (YTLMuxOperation *)mergeVideoURL:(NSURL *)videoURL audioURL:(NSURL *)audioURL outputURL:(NSURL *)outputURL completion:(YTLMuxCompletion)completion {
+    YTLMuxOperation *operation = [YTLMuxOperation new];
     AVURLAsset *videoAsset = [AVURLAsset URLAssetWithURL:videoURL options:YTLAssetOptions()];
     AVURLAsset *audioAsset = [AVURLAsset URLAssetWithURL:audioURL options:YTLAssetOptions()];
 
@@ -79,20 +138,23 @@ static NSDictionary *YTLAssetOptions(void) {
             }
             compositionVideo.preferredTransform = videoTrack.preferredTransform;
 
-            [self exportAsset:composition outputURL:outputURL fileTypes:@[AVFileTypeMPEG4, AVFileTypeQuickTimeMovie] lastError:nil completion:completion];
+            [self exportAsset:composition outputURL:outputURL fileTypes:@[AVFileTypeMPEG4, AVFileTypeQuickTimeMovie] lastError:nil operation:operation completion:completion];
         }];
     }];
+    return operation;
 }
 
-+ (void)remuxAudioURL:(NSURL *)audioURL outputURL:(NSURL *)outputURL completion:(YTLMuxCompletion)completion {
++ (YTLMuxOperation *)remuxAudioURL:(NSURL *)audioURL outputURL:(NSURL *)outputURL completion:(YTLMuxCompletion)completion {
+    YTLMuxOperation *operation = [YTLMuxOperation new];
     AVURLAsset *asset = [AVURLAsset URLAssetWithURL:audioURL options:YTLAssetOptions()];
     [asset loadValuesAsynchronouslyForKeys:@[@"tracks"] completionHandler:^{
         if ([asset tracksWithMediaType:AVMediaTypeAudio].count == 0) {
             completion(nil, YTLMergeError(@"The downloaded audio could not be read", nil));
             return;
         }
-        [self exportAsset:asset outputURL:outputURL fileTypes:@[AVFileTypeAppleM4A] lastError:nil completion:completion];
+        [self exportAsset:asset outputURL:outputURL fileTypes:@[AVFileTypeAppleM4A] lastError:nil operation:operation completion:completion];
     }];
+    return operation;
 }
 
 @end

@@ -30,15 +30,21 @@ static NSArray <NSString *> *YTLAdElementIdentifiers(void) {
     static NSArray <NSString *> *identifiers;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        identifiers = @[@"brand_promo", @"brand_video_shelf", @"carousel_footered_layout", @"carousel_headered_layout", @"eml.expandable_metadata", @"feed_ad_metadata", @"full_width_portrait_image_layout", @"full_width_square_image_layout", @"grid_ads_image_layout", @"landscape_image_wide_button_layout", @"product_carousel", @"product_engagement_panel", @"product_item", @"shopping_carousel", @"shopping_item_card_list", @"statement_banner", @"square_image_layout", @"text_image_button_layout", @"text_search_ad", @"video_display_full_layout", @"video_display_full_buttoned_layout"];
+        identifiers = @[@"brand_promo", @"brand_video_shelf", @"carousel_footered_layout", @"carousel_headered_layout", @"eml.expandable_metadata.vpp", @"feed_ad_metadata", @"full_width_portrait_image_layout", @"full_width_square_image_layout", @"grid_ads_image_layout", @"landscape_image_wide_button_layout", @"product_carousel", @"product_engagement_panel", @"product_item", @"shopping_carousel", @"shopping_item_card_list", @"statement_banner", @"square_image_layout", @"text_image_button_layout", @"text_search_ad", @"video_display_full_layout", @"video_display_full_buttoned_layout"];
     });
     return identifiers;
+}
+
+// Protobuf fields come and go between YouTube versions; reading a field the build no longer
+// has would be an unrecognized selector, so optional fields are read defensively.
+static BOOL YTLProtoFlag(id object, NSString *key) {
+    return [YTLProtoValue(object, key) boolValue];
 }
 
 static BOOL YTLIsAdElementRenderer(YTIElementRenderer *renderer) {
     if (![renderer isKindOfClass:%c(YTIElementRenderer)]) return NO;
     // Ads always carry ad logging data.
-    if ([renderer respondsToSelector:@selector(hasCompatibilityOptions)] && renderer.hasCompatibilityOptions && renderer.compatibilityOptions.hasAdLoggingData) return YES;
+    if (YTLProtoFlag(renderer, @"hasCompatibilityOptions") && YTLProtoFlag(YTLProtoValue(renderer, @"compatibilityOptions"), @"hasAdLoggingData")) return YES;
 
     NSString *description = [renderer description];
     for (NSString *identifier in YTLAdElementIdentifiers()) {
@@ -47,9 +53,13 @@ static BOOL YTLIsAdElementRenderer(YTIElementRenderer *renderer) {
     return NO;
 }
 
+static BOOL YTLIsPromotedVideo(YTIItemSectionSupportedRenderers *content) {
+    return YTLProtoFlag(content, @"hasPromotedVideoRenderer") || YTLProtoFlag(content, @"hasCompactPromotedVideoRenderer") || YTLProtoFlag(content, @"hasPromotedVideoInlineMutedRenderer");
+}
+
 static BOOL YTLIsPromotedSectionContent(YTIItemSectionSupportedRenderers *content) {
     if (![content isKindOfClass:%c(YTIItemSectionSupportedRenderers)]) return NO;
-    return content.hasPromotedVideoRenderer || content.hasCompactPromotedVideoRenderer || content.hasPromotedVideoInlineMutedRenderer || YTLIsAdElementRenderer(content.elementRenderer);
+    return YTLIsPromotedVideo(content) || YTLIsAdElementRenderer(YTLProtoValue(content, @"elementRenderer"));
 }
 
 static BOOL YTLIsAdSectionEntry(id entry) {
@@ -264,8 +274,7 @@ static void YTLOverrideGetter(NSString *className, NSString *selectorName, IMP r
     if (YTLAdsBlocked()) {
         NSMutableArray <YTISectionListSupportedRenderers *> *contentsArray = model.contentsArray;
         NSIndexSet *removeIndexes = [contentsArray indexesOfObjectsPassingTest:^BOOL(YTISectionListSupportedRenderers *renderers, NSUInteger idx, BOOL *stop) {
-            YTIItemSectionSupportedRenderers *firstObject = renderers.itemSectionRenderer.contentsArray.firstObject;
-            return firstObject.hasPromotedVideoRenderer || firstObject.hasCompactPromotedVideoRenderer || firstObject.hasPromotedVideoInlineMutedRenderer;
+            return YTLIsPromotedVideo(renderers.itemSectionRenderer.contentsArray.firstObject);
         }];
         [contentsArray removeObjectsAtIndexes:removeIndexes];
     }

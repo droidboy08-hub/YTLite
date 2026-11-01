@@ -168,3 +168,11 @@ static void YTLFindTopRightButton(UIView *view, UIView *overlay, CGFloat maxY, C
     YTLPresentDownloads(YTLPlayerForView(self), sender);
 }
 %end
+
+%ctor {
+    %init;
+    // No download can be running yet: drop work folders left by a killed app.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        [YTLDownloadManager removeStaleTemporaryFiles];
+    });
+}

@@ -14,27 +14,19 @@ static UIImage *YTImageNamed(NSString *imageName) {
 - (BOOL)playableInBackground { return ytlBool(@"backgroundPlayback") ? YES : NO; }
 %end
 
-// Ad blocking lives in AdBlock.x. This element-level hook is a last line of defence for ads
-// the section filters there miss, and implements "Hide Shorts".
+// Ad blocking lives in AdBlock.x, which removes ad sections and entries by layout. Here only
+// elements that are themselves ads (they carry ad logging data) are blanked: matching layout
+// names against -description would also hit containers whose nested children mention them.
+// This hook also implements "Hide Shorts".
 %hook YTIElementRenderer
 - (NSData *)elementData {
-    BOOL noAds = ytlBool(@"noAds");
-    BOOL hideShorts = ytlBool(@"hideShorts");
-    if (noAds && self.hasCompatibilityOptions && self.compatibilityOptions.hasAdLoggingData) return nil;
-    if (!noAds && !hideShorts) return %orig;
+    if (ytlBool(@"noAds") && self.hasCompatibilityOptions && self.compatibilityOptions.hasAdLoggingData) return nil;
+    if (!ytlBool(@"hideShorts")) return %orig;
 
     NSString *description = [self description];
-
-    if (noAds) {
-        NSArray *ads = @[@"brand_promo", @"product_carousel", @"product_engagement_panel", @"product_item", @"text_search_ad", @"text_image_button_layout", @"carousel_headered_layout", @"carousel_footered_layout", @"square_image_layout", @"landscape_image_wide_button_layout", @"feed_ad_metadata"];
-        for (NSString *ad in ads) {
-            if ([description containsString:ad]) return [NSData data];
-        }
-    }
-
     NSArray *shortsToRemove = @[@"shorts_shelf.eml", @"shorts_video_cell.eml", @"6Shorts"];
     for (NSString *shorts in shortsToRemove) {
-        if (hideShorts && [description containsString:shorts] && ![description containsString:@"history*"]) {
+        if ([description containsString:shorts] && ![description containsString:@"history*"]) {
             return nil;
         }
     }

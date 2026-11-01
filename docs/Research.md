@@ -50,7 +50,7 @@ Everything is behind the existing **Remove ads** switch (`noAds`, on by default)
 | 2. Feed ads | `YTInnerTubeCollectionViewController` (`displaySections…`, `addSectionsFromArray:`), `YTArraySectionViewModel` (all entry paths) | Removes sections, shelf items and entries whose element renderer has ad logging data or an ad layout identifier. |
 | | `YTAdElementsCellExternallyManagedSlotAdapterImpl isValidSlotType:` → NO | Inline feed ads inserted later through ad slots. |
 | | `YTSectionListViewController loadWithModel:` | Promoted videos (older YouTube versions). |
-| | `YTIElementRenderer elementData` (in `YTLite.x`) | A last line of defense for single elements. It fixes an old bug: the identifier list was compared with `containsObject:` against the whole description, so it never matched. |
+| | `YTIElementRenderer elementData` (in `YTLite.x`) | A last line of defense: blanks elements that carry ad logging data themselves. The old identifier list here compared each identifier with `containsObject:` against the whole description, so it never matched. It was removed rather than "fixed": a renderer's description includes its nested children, so matching it would also blank containers that merely hold an ad. |
 | 3. Shorts ads | `YTReelDataSource` / `YTReelInfinitePlaybackDataSource` / `YTReelContentModel` `makeContentModelForEntry:`, `setReels:` | Ad entries are dropped from the Shorts sequence. |
 | 4. Shopping | `YTWatchNextResponseViewController loadWithModel:` | Removes the auto-opening "products in this video" panel (`PAproduct_list`). |
 | | `YTMainAppVideoPlayerOverlayViewController playerOverlayProvider:didInsertPlayerOverlay:` | Drops the `player_overlay_product_in_video` overlay. |
@@ -58,7 +58,11 @@ Everything is behind the existing **Remove ads** switch (`noAds`, on by default)
 
 YouTube Premium upsells and interstitial promos were already blocked by the NoYTPremium hooks in `YTLite.x`. The separate "Hide paid promotion card" option still controls the "Includes paid promotion" label.
 
-The ad-layout list follows YouTube-X (October 2026) with one deliberate exception: `post_shelf` is **not** treated as an ad, so community posts in the feed stay visible.
+The ad-layout list follows YouTube-X (October 2026) with two deliberate, conservative exceptions:
+- `post_shelf` is **not** treated as an ad, so community posts in the feed stay visible.
+- Of the `eml.expandable_metadata…` rows under a video, only the product-placement variant `eml.expandable_metadata.vpp` is removed. The bare prefix would also remove other expandable rows (for example music or chapter info).
+
+Optional protobuf fields such as `hasPromotedVideoRenderer` are read through `respondsToSelector:`. YouTube drops fields between versions, and calling a getter that no longer exists would crash the feed.
 
 ### Server-side ad insertion (SSAI / "DAI")
 
@@ -109,8 +113,8 @@ This matches yt-dlp's documentation as of mid-2026. Its default clients are `tv_
 1. **`YTLStreamResolver`**: tries `VISIONOS`, then `ANDROID_VR`, then the app's own response. It returns only formats that have a URL, with the matching User-Agent.
 2. **Quality picker**: H.264 MP4 up to 1080p60 (plays everywhere and can be saved to Photos). AV1 MP4 up to 4K is offered **only** on devices with a hardware AV1 decoder (A17 Pro / M3 or later on iOS 17+). VP9 and Opus are in WebM containers that AVFoundation can't remux without FFmpeg, so they're skipped. Audio-only uses AAC and lists one entry per audio track for dubbed videos. "Stable volume" (DRC) duplicates are dropped.
 3. **`YTLChunkedDownloader`**: 8 MiB HTTP `Range` requests, 3 in parallel. `googlevideo.com` throttles long single requests, and yt-dlp uses ≤10 MiB chunks for the same reason. Failed chunks are retried, and a `403`/`410` (expired URL) triggers a fresh `/player` lookup for the same itag.
-4. **`YTLMediaMuxer`**: AVFoundation passthrough (`AVMutableComposition` + `AVAssetExportPresetPassthrough`). The video and audio streams become one `.mp4` without re-encoding. If MP4 refuses the codec it falls back to `.mov`. Audio is remuxed to a regular `.m4a`.
-5. **Saving**: the file goes to `Documents/Downloads`, which is excluded from iCloud backup. After that, an "After download" setting decides what happens: ask, Photos, Files (export to any folder), share sheet, or keep in the app.
+4. **`YTLMediaMuxer`**: AVFoundation passthrough (`AVMutableComposition` + `AVAssetExportPresetPassthrough`). The video and audio streams become one `.mp4` without re-encoding. When the export session doesn't list MP4 among its supported file types for the codec, it falls back to `.mov`. The list is checked first because assigning an unsupported type raises an exception. Audio is remuxed to a regular `.m4a`. Cancelling also cancels a running export.
+5. **Saving**: the file goes to `Documents/Downloads`, which is excluded from iCloud backup. Names are capped at 200 UTF-8 bytes, since APFS allows 255 bytes per name and a CJK character takes 3. If the move still fails, the video ID is used as the name, so a finished download is never lost. Work folders left behind by a killed app are removed at the next launch. After that, an "After download" setting decides what happens: ask, Photos, Files (export to any folder), share sheet, or keep in the app.
 
 **Seeing files in the Files app:** an app's Documents folder only appears under *On My iPhone › YouTube* when its Info.plist has `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace`. The *Create YouTube Plus app* workflow adds both keys when **Build from source** is ticked. On jailbroken installs, use "Save to Files" or "Share" instead.
 

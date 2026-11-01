@@ -139,13 +139,21 @@ static NSString *YTLSanitizedFileName(NSString *title) {
     NSCharacterSet *illegal = [NSCharacterSet characterSetWithCharactersInString:@"/\\:?%*|\"<>\n\r\t"];
     NSString *clean = [[title componentsSeparatedByCharactersInSet:illegal] componentsJoinedByString:@" "];
     clean = [clean stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (clean.length > 120) clean = [clean substringWithRange:[clean rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, 120)]];
+    // File names are limited to 255 UTF-8 *bytes* (a CJK character takes 3, an emoji 4).
+    // Keep room for " (n)" and the extension; cut on whole characters.
+    while (clean.length && [clean lengthOfBytesUsingEncoding:NSUTF8StringEncoding] > 200) {
+        clean = [clean substringToIndex:[clean rangeOfComposedCharacterSequenceAtIndex:clean.length - 1].location];
+    }
+    clean = [clean stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if ([clean hasPrefix:@"."]) clean = [@"_" stringByAppendingString:clean];
     return clean.length ? clean : @"YouTube";
 }
 
+static NSString *const kYTLWorkDirectoryPrefix = @"YTLiteDownload-";
+
 @implementation YTLDownloadManager {
     YTLChunkedDownloader *_currentDownloader;
+    YTLMuxOperation *_currentMux;
     NSURL *_workDirectory;
     NSUInteger _jobID;
     BOOL _cancelled;
@@ -353,7 +361,7 @@ static NSString *YTLSanitizedFileName(NSString *title) {
     _busy = YES;
     _cancelled = NO;
     NSUInteger jobID = ++_jobID;
-    NSString *directoryName = [@"YTLiteDownload-" stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSString *directoryName = [kYTLWorkDirectoryPrefix stringByAppendingString:NSUUID.UUID.UUIDString];
     _workDirectory = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:directoryName] isDirectory:YES];
     [NSFileManager.defaultManager createDirectoryAtURL:_workDirectory withIntermediateDirectories:YES attributes:nil error:nil];
     [self beginBackgroundTask];
@@ -436,12 +444,12 @@ static NSString *YTLSanitizedFileName(NSString *title) {
     };
 
     if (option.video && option.audio) {
-        [YTLMediaMuxer mergeVideoURL:files[0] audioURL:files[1] outputURL:[_workDirectory URLByAppendingPathComponent:@"output.mp4"] completion:done];
+        _currentMux = [YTLMediaMuxer mergeVideoURL:files[0] audioURL:files[1] outputURL:[_workDirectory URLByAppendingPathComponent:@"output.mp4"] completion:done];
     } else if (option.video) {
         done(files[0], nil);  // progressive MP4, already complete
     } else {
         NSURL *raw = files[0];
-        [YTLMediaMuxer remuxAudioURL:raw outputURL:[_workDirectory URLByAppendingPathComponent:@"output.m4a"] completion:^(NSURL *output, NSError *error) {
+        _currentMux = [YTLMediaMuxer remuxAudioURL:raw outputURL:[_workDirectory URLByAppendingPathComponent:@"output.m4a"] completion:^(NSURL *output, NSError *error) {
             // The DASH .m4a plays fine on its own; keep it when the remux fails.
             done(output ?: raw, nil);
         }];
@@ -458,8 +466,12 @@ static NSString *YTLSanitizedFileName(NSString *title) {
     NSURL *destination = [self destinationForTitle:info.title extension:file.pathExtension];
     NSError *moveError = nil;
     if (![NSFileManager.defaultManager moveItemAtURL:file toURL:destination error:&moveError]) {
-        [self failWithError:moveError];
-        return;
+        // Never lose a finished download over its name: retry with the video ID.
+        destination = [self destinationForTitle:info.videoID extension:file.pathExtension];
+        if (![NSFileManager.defaultManager moveItemAtURL:file toURL:destination error:nil]) {
+            [self failWithError:moveError];
+            return;
+        }
     }
 
     [self endJob];
@@ -477,6 +489,7 @@ static NSString *YTLSanitizedFileName(NSString *title) {
     if (!_busy || _cancelled) return;
     _cancelled = YES;
     [_currentDownloader cancel];
+    [_currentMux cancel];
     [self endJob];
     [[YTLDownloadHUD sharedHUD] flashMessage:LOC(@"Cancelled")];
 }
@@ -484,6 +497,7 @@ static NSString *YTLSanitizedFileName(NSString *title) {
 - (void)endJob {
     _busy = NO;
     _currentDownloader = nil;
+    _currentMux = nil;
     if (_workDirectory) [NSFileManager.defaultManager removeItemAtURL:_workDirectory error:nil];
     _workDirectory = nil;
     [self endBackgroundTask];
@@ -663,6 +677,14 @@ static NSString *YTLSanitizedFileName(NSString *title) {
 + (void)deleteAllDownloads {
     for (NSURL *file in [self downloadedFiles]) {
         [NSFileManager.defaultManager removeItemAtURL:file error:nil];
+    }
+}
+
++ (void)removeStaleTemporaryFiles {
+    NSURL *temporary = [NSURL fileURLWithPath:NSTemporaryDirectory() isDirectory:YES];
+    NSArray <NSURL *> *contents = [NSFileManager.defaultManager contentsOfDirectoryAtURL:temporary includingPropertiesForKeys:nil options:0 error:nil];
+    for (NSURL *item in contents) {
+        if ([item.lastPathComponent hasPrefix:kYTLWorkDirectoryPrefix]) [NSFileManager.defaultManager removeItemAtURL:item error:nil];
     }
 }
 

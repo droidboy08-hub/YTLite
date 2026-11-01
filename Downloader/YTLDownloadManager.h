@@ -33,6 +33,8 @@ typedef NS_ENUM(NSInteger, YTLDownloadSaveAction) {
 + (NSArray <NSURL *> *)downloadedFiles;
 + (unsigned long long)downloadsSize;
 + (void)deleteAllDownloads;
+/// Removes work folders left behind when the app was killed mid-download. Call at launch only.
++ (void)removeStaleTemporaryFiles;
 + (NSString *)formattedSize:(unsigned long long)bytes;
 @end
 

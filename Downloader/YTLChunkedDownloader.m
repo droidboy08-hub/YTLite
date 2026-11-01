@@ -69,7 +69,14 @@ static const NSUInteger kYTLMaxAttempts = 4;
 
 - (void)startWithCompletion:(void (^)(NSError *))completion {
     [_queue addOperationWithBlock:^{
-        if (self->_completion || self->_finished) return;
+        if (self->_completion) return;
+        if (self->_finished) {
+            // Cancelled before it started.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion([NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
+            });
+            return;
+        }
         self->_completion = [completion copy];
 
         NSError *error = nil;

@@ -612,7 +612,7 @@
 
 /* SponsorBlock settings */
 "EnableSponsorBlock" = "Enable SponsorBlock";
-"EnableSponsorBlockDesc" = "Activates the SponsorBlock extension.";
+"EnableSponsorBlockDesc" = "Skips sponsors and other segments submitted by the SponsorBlock community (sponsor.ajay.app). Only a short hash prefix of the video ID is sent, not the video itself.";
 "SbPlayerButton" = "Display button in overlay";
 "SbPlayerButtonDesc" = "Adds SponsorBlock button in players overlay. Stays available even if SponsorBlock is disabled, so it can be switched right from the player.";
 "ShowNotifications" = "Show notifications";

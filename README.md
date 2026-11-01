@@ -4,7 +4,7 @@ A flexible enhancer for YouTube on iOS, featuring over hundred customizable opti
 ## Table of Contents
 - [Screenshots](#screenshots)
 - [Main Features](#main-features)
-- [Downloader & ad blocker (built from this repository)](#downloader--ad-blocker-built-from-this-repository)
+- [Downloader, ad blocker & SponsorBlock (built from this repository)](#downloader-ad-blocker--sponsorblock-built-from-this-repository)
 - [FAQ](#faq)
 - [Reviews](#reviews)
 - [How to build a YouTube Plus app using GitHub Actions](#how-to-build-a-youtube-plus-app-using-github-actions)
@@ -56,10 +56,11 @@ A flexible enhancer for YouTube on iOS, featuring over hundred customizable opti
 > Starting from version 5.2, YTPlus requires a subscription.  
 > The last free version is [5.2b4](https://github.com/dayanch96/YTLite/releases/tag/v5.2b4).
 
-## Downloader & ad blocker (built from this repository)
-This repository's source adds two features to the open-source YTLite tweak:
+## Downloader, ad blocker & SponsorBlock (built from this repository)
+This repository's source adds these features to the open-source YTLite tweak:
 - **Download videos and audio to local storage.** The player and Shorts get a download button that opens a quality picker: H.264 up to 1080p, AV1 up to 4K on devices with a hardware AV1 decoder, or audio only. Files are saved to the app's `Documents/Downloads` folder. From there you can save them to Photos, export them to the Files app or share them. To manage them, go to *YouTube settings › YTLite › Downloading*.
 - **Layered ad blocker.** It removes video ads, ads in the feed, search and Shorts, and shopping placements. It's controlled by *General › Remove ads*, which is on by default.
+- **SponsorBlock.** It skips sponsor segments that creators read out, using community timings from [SponsorBlock](https://sponsor.ajay.app). Each category can be set to Off, Ask (shows a skip button) or Auto-skip (with an Unskip button), and an optional sound or haptic plays on skips. Only a 4-character hash prefix of the video ID is sent. Find it under *YouTube settings › YTLite › SponsorBlock*.
 
 How it works, the options considered and the known limits: [docs/Research.md](docs/Research.md).
 

@@ -1,10 +1,11 @@
 # Research: ad blocking and video downloads in the YouTube iOS app
 
-*November 2026. Background for `AdBlock.x` and `Downloader/`.*
+*November 2026. Background for `AdBlock.x`, `SponsorBlock.x` and `Downloader/`.*
 
 ## TL;DR
 
 - **Ad blocking only works reliably inside the app process.** YouTube serves ads through the same InnerTube API responses and the same `googlevideo.com` media servers as the videos themselves, so DNS or host blocklists (Pi-hole, NextDNS, AdGuard DNS) can't tell ads from content. A tweak runs inside YouTube, so it can remove the ads from the decoded response objects before the app acts on them. That is what `AdBlock.x` does, in four layers: video ads, feed ads, Shorts ads and shopping placements.
+- **Sponsorships the creator reads out are part of the video itself.** No response rewriting can remove them. `SponsorBlock.x` skips them using community-submitted timings from SponsorBlock. It's a fifth layer, and it only sends a 4-character hash prefix of the video ID.
 - **The biggest long-term threat is server-side ad insertion (SSAI).** There the ad is stitched into the media stream itself. The iOS player already has a code path for it (`MLPlayerReloadContext … disableDAI:`). If YouTube turns it on for the app, removing the ad schedule from the response will no longer be enough. Sources disagree about how far it has rolled out (see below).
 - **Downloads:** since the switch to SABR (server-side adaptive bitrate), the YouTube app's own player response no longer contains per-format stream URLs. The downloader asks InnerTube for the same video with client profiles that still get plain URLs without a proof-of-origin (PO) token (`VISIONOS`, then `ANDROID_VR`). It downloads them in 8 MiB range chunks and merges video and audio with AVFoundation. No FFmpeg is involved.
 
@@ -34,7 +35,7 @@ All YouTube content reaches the app as protobuf messages from InnerTube (`youtub
 | 3 | **Don't ask for ads** (strip the ad context and ad-targeting signals from outgoing requests) | ⚠️ Helps a little (less targeting) but doesn't remove ads on its own. Kept as a supporting layer (`YTAdsInnerTubeContextDecorator`, `YTDataUtils` / `YTAdShieldUtils` signal hooks). |
 | 4 | **Rewrite the response model** (remove ads from the decoded protobuf objects before the player, feed or Shorts code reads them) | ✅ **The approach used.** It works because the tweak runs inside the app and sees the messages after TLS and decoding. It is what PoomSmart's YouTube-X (MIT, maintained against current YouTube builds), ytkace and YouMod all do. |
 | 5 | **Hide views after they render** | ⚠️ A last resort only. It leaves blank gaps and depends on view identifiers that change often. Used for two leftovers (`elementData` and the `.vpp` view). |
-| 6 | **Skip ads by timing** (seek past them, SponsorBlock-style) | Future option. It's the only client-side answer to stitched-in (SSAI) ads, and it handles creator-read sponsorships. Not implemented here (see "Next steps"). |
+| 6 | **Skip by timing** (seek past known segments) | ✅ **Implemented for in-video sponsorships via SponsorBlock** (layer 5 below). Timing-based skipping would also be the only client-side answer to stitched-in (SSAI) ads, but that part isn't built yet (see "Next steps"). |
 
 ### What `AdBlock.x` does
 
@@ -72,10 +73,20 @@ With SSAI the ad is part of the video segments the server sends, so there is no 
 - Reports conflict on how widely it has rolled out. A blocker vendor claims a global rollout in 2026. Privacy Intact said it was still limited testing as of July 10, 2026. Geeky Gadgets describes it as an experiment.
 - What would likely still work against stitched ads is timing-based skipping. This is an inference, not verified: the player presumably still needs the ad-break boundaries to show the ad UI (the "Ad" label and skip button), so they would probably still be in the response and could be seeked past. SponsorBlock-style community timings are another option. YouTube Premium is the only approach that is fully reliable.
 
+### Layer 5: in-video sponsorships with SponsorBlock (`SponsorBlock.x`)
+
+"This video is sponsored by…" segments are part of the video itself, so they can only be skipped by time. [SponsorBlock](https://sponsor.ajay.app) is a community database of such segments. The API usage below was checked against the server's own route code (October 2026), since the API isn't reachable from the sandbox.
+
+- **Lookup (privacy-preserving):** `GET /api/skipSegments/<first 4 hex chars of SHA-256(videoID)>?categories=[…]&actionTypes=["skip","poi"]`. The server answers with every video in that hash bucket, or `404` when none has segments, and the app keeps the entry whose `videoID` matches. The video ID itself is never sent. Results are cached for the session.
+- **Credit:** after a skip, `POST /api/viewedVideoSponsorTime?UUID=…` counts it for the submitters, just as the official extension does.
+- **Where it hooks:** the same `YTPlayerViewController` points current SponsorBlock tweaks use. `playbackController:didActivateVideo:withPlaybackData:` starts the lookup. `singleVideo:` and `potentiallyMutatedSingleVideo:currentVideoTimeDidChange:` evaluate the current time, and `seekToTime:` skips. It does nothing in Shorts, muted feed previews or while an ad plays.
+- **Decisions:** made by a small pure-C function (`SponsorBlock/YTLSponsorBlockLogic.c`) so they can be unit-tested. An auto-skip beats a skip button. With overlapping segments, the one reaching furthest wins. It ignores segments shorter than 0.5 s or whose end is under 0.5 s away, segments for a cut of the video whose length differs by more than 10 s, and highlights except during the first seconds of playback. Rewinding before a segment arms it again.
+- **Per category:** Off, Ask (a button in the player's bottom-right corner) or Auto-skip (with a five-second **Unskip** notice). The defaults follow the official extension: sponsors are auto-skipped; self-promotion, interaction reminders and highlights get a button; intros, endcards, previews, filler and non-music sections are off.
+
 ### Next steps (not implemented)
 
-1. **SponsorBlock**: skip creator-read sponsor segments. Fetch segments with the privacy-preserving hash-prefix API (`https://sponsor.ajay.app/api/skipSegments/<sha256-prefix>`) and seek past them from the existing `singleVideo:currentVideoTimeDidChange:` hook in `YTLite.x`. The strings and `SponsorAudio.m4a` are already in the bundle.
-2. **SSAI fallback**: if stitched ads show up, read the ad-break timing before it is stripped and seek past it, or experiment with the `disableDAI` reload flag.
+1. **SSAI fallback**: if stitched ads show up, read the ad-break timing before it is stripped and seek past it, or experiment with the `disableDAI` reload flag.
+2. **SponsorBlock extras**: colored segments on the progress bar, a per-channel whitelist, and submitting or voting on segments. The 5.x strings for these are already in the bundle.
 
 ---
 
@@ -132,7 +143,8 @@ This matches yt-dlp's documentation as of mid-2026. Its default clients are `tv_
 
 - All new and changed sources were type-checked with clang (`-Wall -Werror`, iOS 13 deployment target, iPhoneOS 16.5 SDK, the same flags Theos uses) against **two** YouTubeHeader revisions: `07bb69b` (July 2024, matching these sources) and `4b9977e` (October 2026). Logos files were checked through a converter that reproduces Logos's generated C functions. The four existing upstream `.x` files pass as well, after fixing one `-Wmisleading-indentation` error in `Sideloading.x` that would fail a `-Werror` build on current compilers.
 - The InnerTube format discovery above was observed directly on 2026-11-01.
-- **Not verified here:** running on a device. The sandbox can't reach `googlevideo.com`, so the actual media download, merge and every hook's runtime behavior still need testing in the app. Use the **Build from source** workflow option to produce an IPA.
+- SponsorBlock's decision function passes 32 unit-test checks run natively: priorities, end guard, short and outdated segments, segments past the end of the video, highlight windows, NaN times. The API calls were checked against the SponsorBlock server's route handlers.
+- **Not verified here:** running on a device. The sandbox can't reach `googlevideo.com` or `sponsor.ajay.app`, so the actual media download, the merge, live SponsorBlock lookups and every hook's runtime behavior still need testing in the app. Use the **Build from source** workflow option to produce an IPA.
 
 ## Sources
 
@@ -147,4 +159,4 @@ This matches yt-dlp's documentation as of mid-2026. Its default clients are `tv_
 - NextDNS help, "Why can't YouTube ads be blocked": <https://help.nextdns.io/t/g9hmvcq/why-cant-youtube-ads-be-blocked>
 - AdGuard, blocking YouTube ads in 2026: <https://adguard.com/en/article/how-to-block-ads-on-youtube.html>
 - SSAI coverage: <https://www.geeky-gadgets.com/outube-server-side-advertising/>, <https://theproblocker.com/blog/youtube-server-side-ad-insertion-breakthrough/>, <https://privacyintact.com/block-youtube-ads/> (rollout claims differ; see above)
-- SponsorBlock API: <https://wiki.sponsor.ajay.app/w/API_Docs>
+- SponsorBlock API: <https://wiki.sponsor.ajay.app/w/API_Docs>. Server routes checked: <https://github.com/ajayyy/SponsorBlockServer> (`getSkipSegmentsByHash.ts`, `viewedVideoSponsorTime.ts`, `parseParams.ts`; October 2026).

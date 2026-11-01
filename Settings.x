@@ -1,10 +1,14 @@
 #import "YTLite.h"
+#import <objc/message.h>
 #import "Downloader/YTLDownloadManager.h"
+#import "SponsorBlock/YTLSponsorBlock.h"
 
 @interface YTSettingsSectionItemManager (YTLite)
 - (void)updateYTLiteSectionWithEntry:(id)entry;
 - (YTSettingsSectionItem *)downloadsSectionItemForController:(YTSettingsViewController *)settingsViewController;
 - (void)pushDownloadedFilesFromController:(YTSettingsViewController *)settingsViewController;
+- (YTSettingsSectionItem *)sponsorBlockSectionItemForController:(YTSettingsViewController *)settingsViewController;
+- (void)pushSponsorCategoriesFromController:(YTSettingsViewController *)settingsViewController;
 @end
 
 static const NSInteger YTLiteSection = 789;
@@ -206,6 +210,73 @@ static NSString *GetCacheSize() {
     [settingsViewController pushViewController:picker];
 }
 
+%new
+- (YTSettingsSectionItem *)sponsorBlockSectionItemForController:(YTSettingsViewController *)settingsViewController {
+    Class YTSettingsSectionItemClass = %c(YTSettingsSectionItem);
+
+    return [YTSettingsSectionItemClass itemWithTitle:@"SponsorBlock"
+        accessibilityIdentifier:@"YTLiteSectionItem"
+        detailTextBlock:^NSString *() {
+            return @"‣";
+        }
+        selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+            YTSettingsSectionItem *segments = [YTSettingsSectionItemClass itemWithTitle:LOC(@"Segments") accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:^NSString *() {
+                return @"‣";
+            } selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+                [self pushSponsorCategoriesFromController:settingsViewController];
+                return YES;
+            }];
+
+            NSArray <YTSettingsSectionItem *> *rows = @[
+                [self switchWithTitle:@"EnableSponsorBlock" key:@"sponsorBlock"],
+                segments,
+                [self switchWithTitle:@"ShowNotifications" key:@"sbShowNotifications"],
+                [self switchWithTitle:@"SegmentSkipAudio" key:@"sbSkipAudio"],
+                [self switchWithTitle:@"SegmentSkipFeedback" key:@"sbSkipHaptic"]
+            ];
+
+            YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:@"SponsorBlock" pickerSectionTitle:nil rows:rows selectedItemIndex:NSNotFound parentResponder:[self parentResponder]];
+            [settingsViewController pushViewController:picker];
+            return YES;
+        }];
+}
+
+// One row per category; tapping it offers Disable / Ask / Auto-skip and updates the row in place.
+%new
+- (void)pushSponsorCategoriesFromController:(YTSettingsViewController *)settingsViewController {
+    Class YTSettingsSectionItemClass = %c(YTSettingsSectionItem);
+    NSMutableArray <YTSettingsSectionItem *> *rows = [NSMutableArray array];
+
+    for (YTLSponsorCategory *category in [YTLSponsorCategory allCategories]) {
+        // Order matches YTLSBMode (Off, Ask, Auto).
+        NSArray <NSString *> *modeTitles = @[LOC(@"Sb.Disable"), LOC(@"Sb.Ask"), LOC(category.isHighlight ? @"Sb.SkipTo" : @"Sb.Skip")];
+
+        [rows addObject:[YTSettingsSectionItemClass itemWithTitle:LOC(category.titleKey) titleDescription:LOC([category.titleKey stringByAppendingString:@"Desc"]) accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:^NSString *() {
+            return modeTitles[category.mode];
+        } selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+            UIAlertController *sheet = [UIAlertController alertControllerWithTitle:LOC(category.titleKey) message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+            [modeTitles enumerateObjectsUsingBlock:^(NSString *title, NSUInteger mode, BOOL *stop) {
+                NSString *label = mode == (NSUInteger)category.mode ? [@"✓ " stringByAppendingString:title] : title;
+                [sheet addAction:[UIAlertAction actionWithTitle:label style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    category.mode = (YTLSBMode)mode;
+                    // Settings pickers can't be reloaded; update the visible row directly.
+                    SEL setDetailText = NSSelectorFromString(@"setDetailText:");
+                    if ([cell respondsToSelector:setDetailText]) ((void (*)(id, SEL, id))objc_msgSend)(cell, setDetailText, title);
+                    [settingsViewController reloadData];
+                }]];
+            }];
+            [sheet addAction:[UIAlertAction actionWithTitle:LOC(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+            sheet.popoverPresentationController.sourceView = cell;
+            sheet.popoverPresentationController.sourceRect = cell.bounds;
+            [[%c(YTUIUtils) topViewControllerForPresenting] presentViewController:sheet animated:YES completion:nil];
+            return YES;
+        }]];
+    }
+
+    YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:LOC(@"Segments") pickerSectionTitle:nil rows:rows selectedItemIndex:NSNotFound parentResponder:[self parentResponder]];
+    [settingsViewController pushViewController:picker];
+}
+
 %new(v@:@)
 - (void)updateYTLiteSectionWithEntry:(id)entry {
     NSMutableArray *sectionItems = [NSMutableArray array];
@@ -233,6 +304,8 @@ static NSString *GetCacheSize() {
     [sectionItems addObject:general];
 
     [sectionItems addObject:[self downloadsSectionItemForController:settingsViewController]];
+
+    [sectionItems addObject:[self sponsorBlockSectionItemForController:settingsViewController]];
 
     YTSettingsSectionItem *navbar = [YTSettingsSectionItemClass itemWithTitle:LOC(@"Navbar")
     accessibilityIdentifier:@"YTLiteSectionItem"

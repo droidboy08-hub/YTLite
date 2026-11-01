@@ -45,6 +45,12 @@ on:
         required: true
         default: false
 
+      build_from_source:
+        description: "Build the tweak from this repository's source (video downloader + ad blocker) instead of downloading YouTube Plus"
+        type: boolean
+        required: true
+        default: false
+
       ipa_url:
         description: "URL to the decrypted IPA file"
         default: ""
@@ -91,6 +97,7 @@ jobs:
       enable_demc: ${{ inputs.enable_demc }}
       enable_localization: ${{ inputs.enable_localization }}
       tweak_version: ${{ inputs.tweak_version }}
+      build_from_source: ${{ inputs.build_from_source }}
 
   package:
     name: Package IPA
@@ -98,6 +105,8 @@ jobs:
     needs: build-tweaks
     permissions:
       contents: write
+    env:
+      APP_VERSION: ${{ inputs.build_from_source && 'ytlite-source' || inputs.tweak_version }}
 
     steps:
       - name: Download built debs
@@ -109,7 +118,7 @@ jobs:
       - name: Hide sensitive inputs
         uses: levibostian/action-hide-sensitive-inputs@v1
         with:
-          exclude_inputs: bundle_id,display_name,enable_demc,enable_ryd,enable_ytabc,enable_youpip,enable_yq,enable_ytuhd,enable_localization,info_note,tweak_version
+          exclude_inputs: bundle_id,display_name,enable_demc,enable_ryd,enable_ytabc,enable_youpip,enable_yq,enable_ytuhd,enable_localization,build_from_source,info_note,tweak_version
 
       - name: Download and validate IPA
         run: |
@@ -127,6 +136,13 @@ jobs:
           /usr/libexec/PlistBuddy -c "Delete :UIDesignRequiresCompatibility" "$plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Delete :NSFaceIDUsageDescription" "$plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSFaceIDUsageDescription string 'Face ID is required to authenticate.'" "$plist"
+          if [ "${{ inputs.build_from_source }}" = "true" ]; then
+            # Show the app's Documents folder (downloaded videos) in the Files app.
+            for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+              /usr/libexec/PlistBuddy -c "Delete :$key" "$plist" 2>/dev/null || true
+              /usr/libexec/PlistBuddy -c "Add :$key bool true" "$plist"
+            done
+          fi
           rm youtube.ipa
           (cd ipa_tmp && zip -qry ../youtube.ipa .)
           rm -rf ipa_tmp
@@ -140,14 +156,14 @@ jobs:
           for f in *.deb; do
             [ -f "$f" ] && tweaks="$tweaks $f"
           done
-          cyan -i youtube.ipa -o YouTubePlus_${{ github.event.inputs.tweak_version }}.ipa -uwef $tweaks -n "${{ github.event.inputs.display_name }}" -b ${{ github.event.inputs.bundle_id }}
+          cyan -i youtube.ipa -o "YouTubePlus_${APP_VERSION}.ipa" -uwef $tweaks -n "${{ github.event.inputs.display_name }}" -b ${{ github.event.inputs.bundle_id }}
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ytp-${{ github.run_number }}
-          name: YouTubePlus v${{ github.event.inputs.tweak_version }} (${{ github.run_number }})
-          files: YouTubePlus_${{ github.event.inputs.tweak_version }}.ipa
+          name: YouTubePlus v${{ env.APP_VERSION }} (${{ github.run_number }})
+          files: YouTubePlus_${{ env.APP_VERSION }}.ipa
           draft: true
 
       - name: Output Release URL
